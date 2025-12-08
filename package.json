@@ -12,13 +12,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/example/zotero-openreview.git"
+    "url": "git+https://github.com/Kevin65536/zotero-openreview-plugin.git"
   },
-  "author": "Your Name",
+  "author": "Kevin65536",
   "bugs": {
-    "url": "https://github.com/example/zotero-openreview/issues"
+    "url": "https://github.com/Kevin65536/zotero-openreview-plugin/issues"
   },
-  "homepage": "https://github.com/example/zotero-openreview#readme",
+  "homepage": "https://github.com/Kevin65536/zotero-openreview-plugin#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
