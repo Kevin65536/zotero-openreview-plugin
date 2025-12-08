@@ -15,7 +15,7 @@ Import papers from OpenReview workshops and venues directly into Zotero.
 
 ## Installation
 
-1. Download the latest `.xpi` file from the [Releases](https://github.com/example/zotero-openreview/releases) page
+1. Download the latest `.xpi` file from the [Releases](https://github.com/kevin65536/zotero-openreview-plugin/releases) page
 2. In Zotero, go to `Tools` → `Add-ons`
 3. Click the gear icon and select `Install Add-on From File...`
 4. Select the downloaded `.xpi` file
