@@ -1,0 +1,10 @@
+pref-title = OpenReview Import Settings
+pref-download-pdfs =
+    .label = Download PDFs by default
+pref-import-reviews =
+    .label = Import reviews and comments by default
+pref-skip-duplicates =
+    .label = Skip duplicate papers by default
+pref-accepted-only =
+    .label = Only import accepted papers by default
+pref-help = { $name } Build { $version } { $time }

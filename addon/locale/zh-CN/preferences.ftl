@@ -1,0 +1,10 @@
+pref-title = OpenReview 导入设置
+pref-download-pdfs =
+    .label = 默认下载 PDF
+pref-import-reviews =
+    .label = 默认导入评审意见和评论
+pref-skip-duplicates =
+    .label = 默认跳过重复论文
+pref-accepted-only =
+    .label = 默认仅导入已接收论文
+pref-help = { $name } 构建版本 { $version } { $time }

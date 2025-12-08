@@ -1,0 +1,37 @@
+<linkset>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+</linkset>
+<groupbox
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window });"
+>
+  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
+  
+  <vbox style="margin: 10px 0;">
+    <checkbox
+      id="zotero-prefpane-__addonRef__-download-pdfs"
+      preference="downloadPdfs"
+      data-l10n-id="pref-download-pdfs"
+    />
+    <checkbox
+      id="zotero-prefpane-__addonRef__-import-reviews"
+      preference="importReviews"
+      data-l10n-id="pref-import-reviews"
+    />
+    <checkbox
+      id="zotero-prefpane-__addonRef__-skip-duplicates"
+      preference="skipDuplicates"
+      data-l10n-id="pref-skip-duplicates"
+    />
+    <checkbox
+      id="zotero-prefpane-__addonRef__-accepted-only"
+      preference="acceptedOnly"
+      data-l10n-id="pref-accepted-only"
+    />
+  </vbox>
+</groupbox>
+<vbox>
+  <html:label
+    data-l10n-id="pref-help"
+    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
+  ></html:label>
+</vbox>
