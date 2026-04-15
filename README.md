@@ -1,8 +1,9 @@
 # Zotero OpenReview Plugin
 
-[![zotero target version](https://img.shields.io/badge/Zotero-7-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
+[![zotero target version](https://img.shields.io/badge/Zotero-9-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org/download/)
 
 Import papers from OpenReview workshops and venues directly into Zotero.
+Tested and confirmed compatible with Zotero 9.
 
 ## Features
 
@@ -44,7 +45,7 @@ Import papers from OpenReview workshops and venues directly into Zotero.
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) (LTS version)
-- [Zotero 7](https://www.zotero.org/support/beta_builds) (beta)
+- [Zotero 9](https://www.zotero.org/download/)
 
 ### Setup
 
