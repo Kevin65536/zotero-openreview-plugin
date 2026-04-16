@@ -36,6 +36,7 @@ export type FluentMessageId =
   | 'progress-error'
   | 'progress-fetching-papers'
   | 'progress-importing'
+  | 'progress-keep-visible'
   | 'progress-no-papers'
   | 'progress-parsing-url'
   | 'progress-title'

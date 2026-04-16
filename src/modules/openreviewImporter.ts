@@ -427,12 +427,12 @@ export class OpenReviewImporter {
       errors: [],
     };
 
-    // Create progress window - closeOnClick:true allows user to dismiss it manually
+    // Keep the progress window visible for the full import lifecycle.
     const progressWin = new ztoolkit.ProgressWindow(
       getString("progress-title"),
       {
-        closeOnClick: true,
-        closeTime: 60000, // Auto-close after 60s as fallback
+        closeOnClick: false,
+        closeTime: -1,
       },
     )
       .createLine({
@@ -441,6 +441,8 @@ export class OpenReviewImporter {
         progress: 0,
       })
       .show();
+
+    progressWin.win.addDescription(getString("progress-keep-visible"));
 
     try {
       // Parse URL to get venue info
