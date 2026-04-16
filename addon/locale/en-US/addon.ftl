@@ -24,13 +24,25 @@ dialog-cancel-button = Cancel
 # Progress messages
 progress-title = Importing from OpenReview
 progress-parsing-url = Parsing URL...
+progress-close-blocked = Import is still running. Keep this window open to preserve the visual progress, or pause the importer first.
+progress-close-button = Close
+progress-current-paper = Current item: { $title }
+progress-detail-pending = Waiting for the next import step...
+progress-found-papers = Found { $count } papers to process.
 progress-keep-visible = Import is in progress. This window will stay open until the current import finishes so the visual progress is not lost.
 progress-fetching-papers = Fetching papers from OpenReview...
+progress-importing-current = Importing papers ({ $current }/{ $total })
 progress-no-papers = No papers found in this venue
+progress-pause-button = Pause
+progress-pause-requested = Pause requested. The importer will pause after the current step finishes.
+progress-paused = Import paused. Click Resume to continue, or close this window to stop the current import.
 progress-creating-collection = Creating collection...
 progress-importing = Importing papers
+progress-ready-to-close = Import finished. You can close this window now.
+progress-resume-button = Resume
 progress-complete = Import complete! Imported: { $imported }, Skipped: { $skipped }, Failed: { $failed }
 progress-error = Error
+progress-summary = Processed: { $processed }/{ $total } | Imported: { $imported } | Skipped: { $skipped } | Failed: { $failed }
 
 # Error messages
 error-title = OpenReview Import Error

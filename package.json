@@ -1,7 +1,7 @@
 {
   "name": "zotero-openreview",
   "type": "module",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Import papers from OpenReview workshops and venues into Zotero",
   "config": {
     "addonName": "Zotero OpenReview",

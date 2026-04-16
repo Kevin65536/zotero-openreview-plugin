@@ -4,6 +4,7 @@
  */
 
 import { getString } from "../utils/locale";
+import { isWindowAlive } from "../utils/window";
 import { OpenReviewApi, FetchOptions } from "./openreviewApi";
 import { CollectionManager } from "./collectionManager";
 import { ZoteroItemCreator } from "./zoteroItemCreator";
@@ -40,6 +41,483 @@ export interface ImportResult {
   skipped: number;
   failed: number;
   errors: string[];
+}
+
+interface ImportProgressState {
+  detail: string;
+  failed: number;
+  imported: number;
+  message: string;
+  progress: number;
+  skipped: number;
+  total: number;
+}
+
+function getProcessedCount(
+  result: Pick<ImportResult, "imported" | "skipped" | "failed">,
+): number {
+  return result.imported + result.skipped + result.failed;
+}
+
+function getImportProgress(progressCount: number, total: number): number {
+  if (total <= 0) {
+    return 0;
+  }
+  return (progressCount / total) * 100;
+}
+
+function truncateProgressText(text: string, maxLength = 100): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 3)}...`;
+}
+
+class ImportProgressDialog {
+  private static readonly closeButtonId = "openreview-import-progress-close";
+
+  private static readonly detailId = "openreview-import-progress-detail";
+
+  private static readonly noticeId = "openreview-import-progress-notice";
+
+  private static readonly pauseButtonId = "openreview-import-progress-pause";
+
+  private static readonly progressFillId = "openreview-import-progress-fill";
+
+  private static readonly progressLabelId = "openreview-import-progress-label";
+
+  private static readonly statusId = "openreview-import-progress-status";
+
+  private static readonly summaryId = "openreview-import-progress-summary";
+
+  private allowClose = false;
+
+  private autoCloseVersion = 0;
+
+  private cancelRequested = false;
+
+  private closeBlocked = false;
+
+  private dialogWindow?: Window;
+
+  private pauseRequested = false;
+
+  private reopenPending = false;
+
+  private resumeResolver?: () => void;
+
+  private state: ImportProgressState = {
+    detail: getString("progress-detail-pending"),
+    failed: 0,
+    imported: 0,
+    message: getString("progress-parsing-url"),
+    progress: 0,
+    skipped: 0,
+    total: 0,
+  };
+
+  private waitingForResume = false;
+
+  open(): void {
+    const dialogWindow = this.getDialogWindow();
+    if (dialogWindow) {
+      dialogWindow.focus();
+      this.render();
+      return;
+    }
+
+    const dialogData = {
+      loadCallback: () => {
+        this.attachCloseGuard();
+        this.render();
+      },
+      unloadCallback: () => {
+        if (
+          !this.allowClose &&
+          !this.reopenPending &&
+          addon.data.alive !== false
+        ) {
+          this.closeBlocked = true;
+          this.reopenPending = true;
+          void Zotero.Promise.delay(0).then(() => {
+            this.reopenPending = false;
+            if (!this.allowClose && addon.data.alive !== false) {
+              this.open();
+            }
+          });
+        }
+      },
+    };
+
+    const dialogHelper = new ztoolkit.Dialog(6, 1)
+      .addCell(0, 0, {
+        tag: "h2",
+        namespace: "html",
+        styles: {
+          margin: "0 0 8px 0",
+        },
+        properties: { innerHTML: getString("progress-title") },
+      })
+      .addCell(1, 0, {
+        tag: "p",
+        namespace: "html",
+        id: ImportProgressDialog.noticeId,
+        styles: {
+          fontSize: "13px",
+          lineHeight: "1.5",
+          margin: "0 0 12px 0",
+        },
+        properties: { innerHTML: this.getNoticeText() },
+      })
+      .addCell(2, 0, {
+        tag: "div",
+        namespace: "html",
+        styles: {
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          minWidth: "100%",
+          width: "100%",
+        },
+        children: [
+          {
+            tag: "div",
+            namespace: "html",
+            styles: {
+              background: "#d7dce2",
+              borderRadius: "999px",
+              minWidth: "100%",
+              height: "14px",
+              overflow: "hidden",
+              width: "100%",
+            },
+            children: [
+              {
+                tag: "div",
+                namespace: "html",
+                id: ImportProgressDialog.progressFillId,
+                styles: {
+                  background:
+                    "linear-gradient(90deg, #3d6ea8 0%, #5aa0d6 100%)",
+                  height: "100%",
+                  transition: "width 160ms ease",
+                  width: "0%",
+                },
+                properties: { innerHTML: "&nbsp;" },
+              },
+            ],
+          },
+          {
+            tag: "div",
+            namespace: "html",
+            id: ImportProgressDialog.progressLabelId,
+            styles: {
+              color: "#4a4a4a",
+              fontSize: "12px",
+            },
+            properties: { innerHTML: "0%" },
+          },
+        ],
+      })
+      .addCell(3, 0, {
+        tag: "p",
+        namespace: "html",
+        id: ImportProgressDialog.statusId,
+        styles: {
+          fontWeight: "600",
+          lineHeight: "1.4",
+          margin: "12px 0 6px 0",
+        },
+        properties: { innerHTML: this.state.message },
+      })
+      .addCell(4, 0, {
+        tag: "p",
+        namespace: "html",
+        id: ImportProgressDialog.summaryId,
+        styles: {
+          color: "#4a4a4a",
+          fontSize: "12px",
+          lineHeight: "1.4",
+          margin: "0 0 6px 0",
+        },
+        properties: { innerHTML: this.getSummaryText() },
+      })
+      .addCell(5, 0, {
+        tag: "p",
+        namespace: "html",
+        id: ImportProgressDialog.detailId,
+        styles: {
+          color: "#4a4a4a",
+          fontSize: "12px",
+          lineHeight: "1.5",
+          margin: "0",
+          wordBreak: "break-word",
+        },
+        properties: { innerHTML: this.state.detail },
+      })
+      .addButton(
+        getString("progress-pause-button"),
+        ImportProgressDialog.pauseButtonId,
+        {
+          noClose: true,
+          callback: () => {
+            this.togglePause();
+          },
+        },
+      )
+      .addButton(
+        getString("progress-close-button"),
+        ImportProgressDialog.closeButtonId,
+        {
+          noClose: true,
+          callback: () => {
+            this.handleCloseRequest();
+          },
+        },
+      )
+      .setDialogData(dialogData)
+      .open(getString("progress-title"), {
+        alwaysRaised: true,
+        fitContent: false,
+        height: 280,
+        resizable: false,
+        width: 640,
+      });
+
+    this.dialogWindow = dialogHelper.window;
+  }
+
+  update(nextState: Partial<ImportProgressState>): void {
+    this.state = {
+      ...this.state,
+      ...nextState,
+    };
+    if (!this.allowClose) {
+      this.closeBlocked = false;
+    }
+    this.render();
+  }
+
+  async waitIfPaused(): Promise<boolean> {
+    while (this.pauseRequested && !this.cancelRequested) {
+      this.waitingForResume = true;
+      this.render();
+      await new Promise<void>((resolve) => {
+        this.resumeResolver = resolve;
+      });
+      this.resumeResolver = undefined;
+    }
+    this.waitingForResume = false;
+    this.render();
+    return !this.cancelRequested;
+  }
+
+  finish(nextState: Partial<ImportProgressState>, closeDelayMs: number): void {
+    this.allowClose = true;
+    this.autoCloseVersion += 1;
+    this.closeBlocked = false;
+    this.pauseRequested = false;
+    this.waitingForResume = false;
+    if (this.resumeResolver) {
+      this.resumeResolver();
+      this.resumeResolver = undefined;
+    }
+    this.update(nextState);
+    this.scheduleAutoClose(closeDelayMs);
+  }
+
+  private attachCloseGuard(): void {
+    const dialogWindow = this.getDialogWindow();
+    if (!dialogWindow) {
+      return;
+    }
+    dialogWindow.addEventListener("beforeunload", this.handleBeforeUnload);
+  }
+
+  private getDialogWindow(): Window | undefined {
+    const dialogWindow = this.dialogWindow;
+    if (!dialogWindow || !isWindowAlive(dialogWindow)) {
+      return undefined;
+    }
+    return dialogWindow;
+  }
+
+  private getNoticeText(): string {
+    if (this.allowClose) {
+      return getString("progress-ready-to-close");
+    }
+    if (this.closeBlocked) {
+      return getString("progress-close-blocked");
+    }
+    if (this.waitingForResume) {
+      return getString("progress-paused");
+    }
+    if (this.pauseRequested) {
+      return getString("progress-pause-requested");
+    }
+    return getString("progress-keep-visible");
+  }
+
+  private getSummaryText(): string {
+    return getString("progress-summary", {
+      args: {
+        failed: this.state.failed,
+        imported: this.state.imported,
+        processed: this.state.imported + this.state.skipped + this.state.failed,
+        skipped: this.state.skipped,
+        total: this.state.total,
+      },
+    });
+  }
+
+  private canCancelByClosing(): boolean {
+    return this.waitingForResume;
+  }
+
+  private handleBeforeUnload = (event: Event): void => {
+    if (this.allowClose) {
+      return;
+    }
+    if (this.canCancelByClosing()) {
+      this.requestCancellation();
+      return;
+    }
+    event.preventDefault();
+    if ("returnValue" in event) {
+      event.returnValue = false;
+    }
+    this.closeBlocked = true;
+    this.render();
+  };
+
+  private handleCloseRequest(): void {
+    if (this.canCancelByClosing()) {
+      this.requestCancellation();
+      const dialogWindow = this.getDialogWindow();
+      if (dialogWindow) {
+        dialogWindow.close();
+      }
+      return;
+    }
+
+    if (!this.allowClose) {
+      this.closeBlocked = true;
+      this.render();
+      return;
+    }
+
+    this.autoCloseVersion += 1;
+    const dialogWindow = this.getDialogWindow();
+    if (dialogWindow) {
+      dialogWindow.close();
+    }
+  }
+
+  private render(): void {
+    const dialogWindow = this.getDialogWindow();
+    if (!dialogWindow) {
+      return;
+    }
+
+    const normalizedProgress = Math.max(0, Math.min(100, this.state.progress));
+    this.setText(ImportProgressDialog.noticeId, this.getNoticeText());
+    this.setText(ImportProgressDialog.statusId, this.state.message);
+    this.setText(ImportProgressDialog.summaryId, this.getSummaryText());
+    this.setText(ImportProgressDialog.detailId, this.state.detail);
+    this.setText(
+      ImportProgressDialog.progressLabelId,
+      `${Math.round(normalizedProgress)}%`,
+    );
+
+    const progressFill = dialogWindow.document.getElementById(
+      ImportProgressDialog.progressFillId,
+    ) as HTMLElement | null;
+    if (progressFill) {
+      progressFill.style.width = `${normalizedProgress}%`;
+    }
+
+    const pauseButton = dialogWindow.document.getElementById(
+      ImportProgressDialog.pauseButtonId,
+    ) as HTMLButtonElement | null;
+    if (pauseButton) {
+      pauseButton.disabled = this.allowClose;
+      pauseButton.textContent =
+        this.pauseRequested || this.waitingForResume
+          ? getString("progress-resume-button")
+          : getString("progress-pause-button");
+    }
+
+    const closeButton = dialogWindow.document.getElementById(
+      ImportProgressDialog.closeButtonId,
+    ) as HTMLButtonElement | null;
+    if (closeButton) {
+      closeButton.disabled = !this.allowClose && !this.canCancelByClosing();
+    }
+  }
+
+  private requestCancellation(): void {
+    if (this.cancelRequested) {
+      return;
+    }
+    this.cancelRequested = true;
+    this.allowClose = true;
+    this.autoCloseVersion += 1;
+    this.closeBlocked = false;
+    this.pauseRequested = false;
+    this.waitingForResume = false;
+    if (this.resumeResolver) {
+      this.resumeResolver();
+      this.resumeResolver = undefined;
+    }
+  }
+
+  wasCancelled(): boolean {
+    return this.cancelRequested;
+  }
+
+  private scheduleAutoClose(closeDelayMs: number): void {
+    const closeVersion = ++this.autoCloseVersion;
+    void Zotero.Promise.delay(closeDelayMs).then(() => {
+      if (closeVersion !== this.autoCloseVersion || !this.allowClose) {
+        return;
+      }
+      const dialogWindow = this.getDialogWindow();
+      if (dialogWindow) {
+        dialogWindow.close();
+      }
+    });
+  }
+
+  private setText(elementId: string, text: string): void {
+    const dialogWindow = this.getDialogWindow();
+    if (!dialogWindow) {
+      return;
+    }
+    const element = dialogWindow.document.getElementById(elementId);
+    if (element) {
+      element.textContent = text;
+    }
+  }
+
+  private togglePause(): void {
+    if (this.allowClose) {
+      return;
+    }
+    this.closeBlocked = false;
+    if (this.pauseRequested || this.waitingForResume) {
+      this.pauseRequested = false;
+      this.waitingForResume = false;
+      if (this.resumeResolver) {
+        this.resumeResolver();
+        this.resumeResolver = undefined;
+      }
+      this.render();
+      return;
+    }
+
+    this.pauseRequested = true;
+    this.render();
+  }
 }
 
 /**
@@ -427,22 +905,8 @@ export class OpenReviewImporter {
       errors: [],
     };
 
-    // Keep the progress window visible for the full import lifecycle.
-    const progressWin = new ztoolkit.ProgressWindow(
-      getString("progress-title"),
-      {
-        closeOnClick: false,
-        closeTime: -1,
-      },
-    )
-      .createLine({
-        text: getString("progress-parsing-url"),
-        type: "default",
-        progress: 0,
-      })
-      .show();
-
-    progressWin.win.addDescription(getString("progress-keep-visible"));
+    const progressDialog = new ImportProgressDialog();
+    progressDialog.open();
 
     try {
       // Parse URL to get venue info
@@ -451,10 +915,14 @@ export class OpenReviewImporter {
         throw new Error(getString("error-invalid-url"));
       }
 
-      progressWin.changeLine({
-        text: getString("progress-fetching-papers"),
-        progress: 10,
+      progressDialog.update({
+        message: getString("progress-fetching-papers"),
+        progress: 0,
       });
+
+      if (!(await progressDialog.waitIfPaused())) {
+        return result;
+      }
 
       // Build fetch options
       const fetchOptions: FetchOptions = {
@@ -470,20 +938,30 @@ export class OpenReviewImporter {
       );
 
       if (papers.length === 0) {
-        progressWin.changeLine({
-          text: getString("progress-no-papers"),
-          type: "default",
-          progress: 100,
-        });
-        progressWin.startCloseTimer(3000);
+        progressDialog.finish(
+          {
+            detail: getString("progress-ready-to-close"),
+            message: getString("progress-no-papers"),
+            progress: 100,
+          },
+          3000,
+        );
         result.success = true;
         return result;
       }
 
-      progressWin.changeLine({
-        text: `${getString("progress-creating-collection")} (${papers.length} papers found)`,
-        progress: 20,
+      progressDialog.update({
+        detail: getString("progress-found-papers", {
+          args: { count: papers.length },
+        }),
+        message: getString("progress-creating-collection"),
+        progress: 0,
+        total: papers.length,
       });
+
+      if (!(await progressDialog.waitIfPaused())) {
+        return result;
+      }
 
       // Create collection
       const collection = await CollectionManager.getOrCreateCollection(
@@ -494,12 +972,28 @@ export class OpenReviewImporter {
       const total = papers.length;
       for (let i = 0; i < papers.length; i++) {
         const paper = papers[i];
-        const progress = 20 + (i / total) * 80;
-
-        progressWin.changeLine({
-          text: `${getString("progress-importing")} (${i + 1}/${total}): ${paper.title.substring(0, 50)}...`,
-          progress,
+        progressDialog.update({
+          detail: getString("progress-current-paper", {
+            args: {
+              title: truncateProgressText(paper.title),
+            },
+          }),
+          failed: result.failed,
+          imported: result.imported,
+          message: getString("progress-importing-current", {
+            args: {
+              current: i + 1,
+              total,
+            },
+          }),
+          progress: getImportProgress(getProcessedCount(result), total),
+          skipped: result.skipped,
+          total,
         });
+
+        if (!(await progressDialog.waitIfPaused())) {
+          return result;
+        }
 
         if (progressCallback) {
           progressCallback(i + 1, total, paper.title);
@@ -527,30 +1021,52 @@ export class OpenReviewImporter {
           result.errors.push(`${paper.title}: ${error}`);
           ztoolkit.log(`Error importing paper: ${error}`);
         }
+
+        progressDialog.update({
+          failed: result.failed,
+          imported: result.imported,
+          progress: getImportProgress(getProcessedCount(result), total),
+          skipped: result.skipped,
+          total,
+        });
+
+        if (progressDialog.wasCancelled()) {
+          return result;
+        }
       }
 
-      // Show success message
-      progressWin.changeLine({
-        text: getString("progress-complete", {
-          args: {
-            imported: result.imported,
-            skipped: result.skipped,
-            failed: result.failed,
-          },
-        }),
-        type: "success",
-        progress: 100,
-      });
-      progressWin.startCloseTimer(5000);
+      progressDialog.finish(
+        {
+          detail: getString("progress-ready-to-close"),
+          failed: result.failed,
+          imported: result.imported,
+          message: getString("progress-complete", {
+            args: {
+              failed: result.failed,
+              imported: result.imported,
+              skipped: result.skipped,
+            },
+          }),
+          progress: 100,
+          skipped: result.skipped,
+          total,
+        },
+        5000,
+      );
 
       result.success = true;
     } catch (error) {
-      progressWin.changeLine({
-        text: `${getString("progress-error")}: ${error}`,
-        type: "fail",
-        progress: 100,
-      });
-      progressWin.startCloseTimer(5000);
+      progressDialog.finish(
+        {
+          detail: getString("progress-ready-to-close"),
+          failed: result.failed,
+          imported: result.imported,
+          message: `${getString("progress-error")}: ${error}`,
+          progress: 100,
+          skipped: result.skipped,
+        },
+        5000,
+      );
 
       result.errors.push(String(error));
       ztoolkit.log(`Import error: ${error}`);
