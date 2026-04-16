@@ -8,6 +8,7 @@ export type FluentMessageId =
   | 'dialog-collection-label'
   | 'dialog-download-pdfs'
   | 'dialog-filter-all'
+  | 'dialog-filter-all-accepted'
   | 'dialog-filter-label'
   | 'dialog-filter-oral'
   | 'dialog-filter-poster'

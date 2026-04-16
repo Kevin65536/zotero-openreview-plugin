@@ -11,6 +11,7 @@ dialog-url-label = Workshop/Venue URL:
 dialog-collection-label = 分类名称:
 dialog-filter-label = 论文筛选
 dialog-filter-all = 所有论文
+dialog-filter-all-accepted = 所有已接收分类
 dialog-filter-oral = 仅 Oral
 dialog-filter-poster = 仅 Poster
 dialog-options-label = 选项

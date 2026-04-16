@@ -11,6 +11,7 @@ dialog-url-label = Workshop/Venue URL:
 dialog-collection-label = Collection Name:
 dialog-filter-label = Paper Filter
 dialog-filter-all = All Papers
+dialog-filter-all-accepted = All Accepted Categories
 dialog-filter-oral = Oral Only
 dialog-filter-poster = Poster Only
 dialog-options-label = Options

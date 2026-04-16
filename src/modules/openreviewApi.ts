@@ -6,6 +6,29 @@
 // OpenReview API V2 base URL
 const OPENREVIEW_API_BASE = "https://api2.openreview.net";
 
+const ACCEPTED_CATEGORY_TAB_REGEX = /Accept\s*\(([^)]+)\)/gi;
+
+const CATEGORY_MATCH_FIELDS = [
+  "presentation_type",
+  "presentation",
+  "decision",
+  "venue",
+  "submission_venue",
+  "session",
+  "track",
+  "category",
+] as const;
+
+const CATEGORY_MATCH_FIELD_HINTS = [
+  "accept",
+  "category",
+  "decision",
+  "presentation",
+  "session",
+  "track",
+  "venue",
+] as const;
+
 /**
  * Represents a paper from OpenReview
  */
@@ -21,8 +44,14 @@ export interface OpenReviewPaper {
   year: number;
   forumUrl: string;
   decision?: string;
-  presentationType?: "oral" | "poster" | "unknown";
+  presentationType?: string;
   number?: number;
+}
+
+export interface OpenReviewAcceptedCategory {
+  id: string;
+  label: string;
+  tabLabel: string;
 }
 
 /**
@@ -61,9 +90,59 @@ export interface VenueInfo {
  * Filter options for fetching papers
  */
 export interface FetchOptions {
-  acceptedOnly?: boolean;
-  oralOnly?: boolean;
-  posterOnly?: boolean;
+  acceptedCategories?: OpenReviewAcceptedCategory[];
+  restrictToAcceptedCategories?: boolean;
+  selectedAcceptedCategory?: string;
+}
+
+function collectTextCandidates(value: unknown): string[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectTextCandidates(item));
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return [String(value)];
+  }
+
+  if (typeof value === "object") {
+    if ("value" in value) {
+      return collectTextCandidates((value as { value: unknown }).value);
+    }
+  }
+
+  return [];
+}
+
+function normalizeCategoryMatchText(value: string): string {
+  return ` ${value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()} `;
+}
+
+function normalizeCategoryId(value: string): string {
+  return normalizeCategoryMatchText(value).trim();
+}
+
+function matchesAcceptedCategory(value: string, categoryId: string): boolean {
+  const normalizedValue = normalizeCategoryMatchText(value);
+  return normalizedValue.includes(` ${normalizeCategoryId(categoryId)} `);
+}
+
+function shouldInspectCategoryField(fieldName: string): boolean {
+  const normalizedFieldName = normalizeCategoryMatchText(fieldName);
+  return CATEGORY_MATCH_FIELD_HINTS.some((hint) =>
+    normalizedFieldName.includes(` ${hint} `),
+  );
 }
 
 /**
@@ -103,6 +182,33 @@ export class OpenReviewApi {
       };
     } catch {
       return null;
+    }
+  }
+
+  static async fetchAcceptedCategories(
+    url: string,
+  ): Promise<OpenReviewAcceptedCategory[]> {
+    try {
+      const urlObj = new URL(url);
+      if (!urlObj.hostname.includes("openreview.net")) {
+        return [];
+      }
+
+      urlObj.hash = "";
+      const response = await Zotero.HTTP.request("GET", urlObj.toString(), {
+        headers: {
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        },
+      });
+
+      const html = String(response.responseText || response.response || "");
+      return this.extractAcceptedCategoriesFromHtml(html);
+    } catch (error) {
+      ztoolkit.log(`Error fetching accepted categories: ${error}`);
+      return [];
     }
   }
 
@@ -152,24 +258,25 @@ export class OpenReviewApi {
 
         // Parse each note into OpenReviewPaper
         for (const note of data.notes) {
-          const paper = this.parseNoteToOpenReviewPaper(note, venueInfo);
+          const paper = this.parseNoteToOpenReviewPaper(
+            note,
+            venueInfo,
+            options.acceptedCategories || [],
+          );
           if (paper) {
-            // Apply filters
-            if (options.acceptedOnly) {
-              // For workshops, accepted papers have venue field set
-              if (!paper.venue || paper.venue === venueInfo.venueId) {
-                continue; // Skip if no specific venue (not accepted)
-              }
+            if (
+              options.restrictToAcceptedCategories &&
+              !paper.presentationType
+            ) {
+              continue;
             }
 
-            if (options.oralOnly) {
-              if (paper.presentationType !== "oral") {
-                continue;
-              }
-            }
-
-            if (options.posterOnly) {
-              if (paper.presentationType !== "poster") {
+            if (options.selectedAcceptedCategory) {
+              if (
+                !paper.presentationType ||
+                normalizeCategoryId(paper.presentationType) !==
+                  normalizeCategoryId(options.selectedAcceptedCategory)
+              ) {
                 continue;
               }
             }
@@ -198,6 +305,7 @@ export class OpenReviewApi {
   private static parseNoteToOpenReviewPaper(
     note: any,
     venueInfo: VenueInfo,
+    acceptedCategories: OpenReviewAcceptedCategory[] = [],
   ): OpenReviewPaper | null {
     try {
       const content = note.content || {};
@@ -227,15 +335,10 @@ export class OpenReviewApi {
       // Extract venue and decision
       const venue = this.extractValue(content.venue) || venueInfo.venueId;
       const decision = this.extractValue(content.decision);
-
-      // Determine presentation type from venue string
-      let presentationType: OpenReviewPaper["presentationType"] = "unknown";
-      const venueLower = venue.toLowerCase();
-      if (venueLower.includes("oral")) {
-        presentationType = "oral";
-      } else if (venueLower.includes("poster")) {
-        presentationType = "poster";
-      }
+      const matchedCategory = this.matchAcceptedCategory(
+        content,
+        acceptedCategories,
+      );
 
       // Construct PDF URL
       const pdfPath = this.extractValue(content.pdf) || `/pdf?id=${note.id}`;
@@ -265,7 +368,7 @@ export class OpenReviewApi {
         year,
         forumUrl,
         decision,
-        presentationType,
+        presentationType: matchedCategory?.label,
         number: note.number,
       };
     } catch (error) {
@@ -286,6 +389,66 @@ export class OpenReviewApi {
       return field.value;
     }
     return field;
+  }
+
+  private static extractAcceptedCategoriesFromHtml(
+    html: string,
+  ): OpenReviewAcceptedCategory[] {
+    const categories: OpenReviewAcceptedCategory[] = [];
+    const seenCategoryIds = new Set<string>();
+
+    for (const match of html.matchAll(ACCEPTED_CATEGORY_TAB_REGEX)) {
+      const label = match[1]?.trim();
+      if (!label) {
+        continue;
+      }
+
+      const id = normalizeCategoryId(label);
+      if (!id || seenCategoryIds.has(id)) {
+        continue;
+      }
+
+      seenCategoryIds.add(id);
+      categories.push({
+        id,
+        label,
+        tabLabel: `Accept (${label})`,
+      });
+    }
+
+    return categories;
+  }
+
+  private static matchAcceptedCategory(
+    content: Record<string, unknown>,
+    acceptedCategories: OpenReviewAcceptedCategory[],
+  ): OpenReviewAcceptedCategory | undefined {
+    if (acceptedCategories.length === 0) {
+      return undefined;
+    }
+
+    const candidates = Array.from(
+      new Set([
+        ...CATEGORY_MATCH_FIELDS.flatMap((fieldName) =>
+          collectTextCandidates(content[fieldName]),
+        ),
+        ...Object.entries(content).flatMap(([fieldName, value]) =>
+          shouldInspectCategoryField(fieldName)
+            ? collectTextCandidates(value)
+            : [],
+        ),
+      ]),
+    );
+
+    for (const candidate of candidates) {
+      for (const acceptedCategory of acceptedCategories) {
+        if (matchesAcceptedCategory(candidate, acceptedCategory.id)) {
+          return acceptedCategory;
+        }
+      }
+    }
+
+    return undefined;
   }
 
   /**

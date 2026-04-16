@@ -5,7 +5,11 @@
 
 import { getString } from "../utils/locale";
 import { isWindowAlive } from "../utils/window";
-import { OpenReviewApi, FetchOptions } from "./openreviewApi";
+import {
+  FetchOptions,
+  OpenReviewAcceptedCategory,
+  OpenReviewApi,
+} from "./openreviewApi";
 import { CollectionManager } from "./collectionManager";
 import { ZoteroItemCreator } from "./zoteroItemCreator";
 
@@ -17,9 +21,9 @@ export interface ImportOptions {
   collectionName: string;
   downloadPdfs: boolean;
   importReviews: boolean;
-  acceptedOnly: boolean;
-  oralOnly: boolean;
-  posterOnly: boolean;
+  acceptedCategories: OpenReviewAcceptedCategory[];
+  paperFilter: string;
+  restrictToAcceptedCategories: boolean;
   skipDuplicates: boolean;
 }
 
@@ -41,6 +45,87 @@ export interface ImportResult {
   skipped: number;
   failed: number;
   errors: string[];
+}
+
+interface ImportDialogData {
+  [key: string]: any;
+  acceptedCategories: OpenReviewAcceptedCategory[];
+  collectionName: string;
+  downloadPdfs: boolean;
+  importReviews: boolean;
+  loadCallback: () => void;
+  paperFilter: string;
+  paperFilterOptions: PaperFilterOption[];
+  paperFilterRequestToken: number;
+  paperFilterUsesAcceptedCategories: boolean;
+  skipDuplicates: boolean;
+  unloadCallback: () => void;
+  url: string;
+}
+
+interface PaperFilterOption {
+  id: string;
+  label: string;
+}
+
+const PAPER_FILTER_OPTIONS_CONTAINER_ID = "openreview-paper-filter-options";
+
+function buildDefaultPaperFilterOptions(): PaperFilterOption[] {
+  return [
+    {
+      id: "all",
+      label: getString("dialog-filter-all"),
+    },
+    {
+      id: "oral",
+      label: getString("dialog-filter-oral"),
+    },
+    {
+      id: "poster",
+      label: getString("dialog-filter-poster"),
+    },
+  ];
+}
+
+function buildPaperFilterOptionsFromAcceptedCategories(
+  acceptedCategories: OpenReviewAcceptedCategory[],
+): PaperFilterOption[] {
+  return [
+    {
+      id: "all",
+      label: getString("dialog-filter-all-accepted"),
+    },
+    ...acceptedCategories.map((acceptedCategory) => ({
+      id: acceptedCategory.id,
+      label: acceptedCategory.tabLabel,
+    })),
+  ];
+}
+
+function buildAcceptedCategoriesFromPaperFilterOptions(
+  paperFilterOptions: PaperFilterOption[],
+): OpenReviewAcceptedCategory[] {
+  return paperFilterOptions
+    .filter((paperFilterOption) => paperFilterOption.id !== "all")
+    .map((paperFilterOption) => ({
+      id: paperFilterOption.id,
+      label: paperFilterOption.id,
+      tabLabel: paperFilterOption.label,
+    }));
+}
+
+function normalizePaperFilterSelection(
+  paperFilter: string,
+  paperFilterOptions: PaperFilterOption[],
+): string {
+  if (
+    paperFilterOptions.some(
+      (paperFilterOption) => paperFilterOption.id === paperFilter,
+    )
+  ) {
+    return paperFilter;
+  }
+  return "all";
 }
 
 interface ImportProgressState {
@@ -524,6 +609,113 @@ class ImportProgressDialog {
  * OpenReview Importer class
  */
 export class OpenReviewImporter {
+  private static attachPaperFilterAutoDetection(
+    dialogWindow: Window,
+    dialogData: ImportDialogData,
+  ): void {
+    this.renderPaperFilterOptions(dialogWindow, dialogData);
+
+    const urlInput = dialogWindow.document.getElementById(
+      "openreview-url-input",
+    ) as HTMLInputElement | null;
+    if (!urlInput) {
+      return;
+    }
+
+    let debounceHandle: ReturnType<typeof setTimeout> | undefined;
+    const refreshPaperFilters = async () => {
+      dialogData.url = urlInput.value.trim();
+      await this.refreshPaperFilterOptionsFromUrl(dialogWindow, dialogData);
+    };
+
+    const scheduleRefresh = () => {
+      if (debounceHandle) {
+        clearTimeout(debounceHandle);
+      }
+      debounceHandle = setTimeout(() => {
+        void refreshPaperFilters();
+      }, 350);
+    };
+
+    urlInput.addEventListener("input", scheduleRefresh);
+    urlInput.addEventListener("change", () => {
+      void refreshPaperFilters();
+    });
+  }
+
+  private static async refreshPaperFilterOptionsFromUrl(
+    dialogWindow: Window,
+    dialogData: ImportDialogData,
+  ): Promise<void> {
+    const url = dialogData.url.trim();
+    const requestToken = ++dialogData.paperFilterRequestToken;
+
+    if (!url || !OpenReviewApi.parseVenueFromUrl(url)) {
+      dialogData.acceptedCategories = [];
+      dialogData.paperFilterOptions = buildDefaultPaperFilterOptions();
+      dialogData.paperFilterUsesAcceptedCategories = false;
+      dialogData.paperFilter = normalizePaperFilterSelection(
+        dialogData.paperFilter,
+        dialogData.paperFilterOptions,
+      );
+      this.renderPaperFilterOptions(dialogWindow, dialogData);
+      return;
+    }
+
+    const acceptedCategories = await OpenReviewApi.fetchAcceptedCategories(url);
+    if (requestToken !== dialogData.paperFilterRequestToken) {
+      return;
+    }
+
+    dialogData.acceptedCategories = acceptedCategories;
+    dialogData.paperFilterOptions =
+      acceptedCategories.length > 0
+        ? buildPaperFilterOptionsFromAcceptedCategories(acceptedCategories)
+        : buildDefaultPaperFilterOptions();
+    dialogData.paperFilterUsesAcceptedCategories =
+      acceptedCategories.length > 0;
+    dialogData.paperFilter = normalizePaperFilterSelection(
+      dialogData.paperFilter,
+      dialogData.paperFilterOptions,
+    );
+    this.renderPaperFilterOptions(dialogWindow, dialogData);
+  }
+
+  private static renderPaperFilterOptions(
+    dialogWindow: Window,
+    dialogData: ImportDialogData,
+  ): void {
+    const filterOptionsContainer = dialogWindow.document.getElementById(
+      PAPER_FILTER_OPTIONS_CONTAINER_ID,
+    );
+    if (!filterOptionsContainer) {
+      return;
+    }
+
+    filterOptionsContainer.replaceChildren();
+    for (const paperFilterOption of dialogData.paperFilterOptions) {
+      const optionLabel = dialogWindow.document.createElement("label");
+      optionLabel.style.alignItems = "center";
+      optionLabel.style.display = "inline-flex";
+      optionLabel.style.gap = "4px";
+
+      const optionInput = dialogWindow.document.createElement("input");
+      optionInput.type = "radio";
+      optionInput.name = "paperFilter";
+      optionInput.value = paperFilterOption.id;
+      optionInput.checked = dialogData.paperFilter === paperFilterOption.id;
+      optionInput.addEventListener("change", () => {
+        dialogData.paperFilter = paperFilterOption.id;
+      });
+
+      const optionText = dialogWindow.document.createElement("span");
+      optionText.textContent = paperFilterOption.label;
+
+      optionLabel.append(optionInput, optionText);
+      filterOptionsContainer.appendChild(optionLabel);
+    }
+  }
+
   /**
    * Register menu items for the plugin
    */
@@ -553,15 +745,20 @@ export class OpenReviewImporter {
    * Open the import dialog
    */
   static async openImportDialog(): Promise<void> {
-    const dialogData: { [key: string]: any } = {
+    const dialogData: ImportDialogData = {
+      acceptedCategories: [],
       url: "",
       collectionName: "",
       downloadPdfs: true,
       importReviews: false,
       paperFilter: "all", // "all", "oral", "poster"
+      paperFilterOptions: buildDefaultPaperFilterOptions(),
+      paperFilterRequestToken: 0,
+      paperFilterUsesAcceptedCategories: false,
       skipDuplicates: true,
       loadCallback: () => {
         ztoolkit.log("Import dialog opened");
+        this.attachPaperFilterAutoDetection(dialogHelper.window, dialogData);
       },
       unloadCallback: () => {
         ztoolkit.log("Import dialog closed");
@@ -647,103 +844,12 @@ export class OpenReviewImporter {
         {
           tag: "div",
           namespace: "html",
+          id: PAPER_FILTER_OPTIONS_CONTAINER_ID,
           styles: {
             display: "flex",
+            flexWrap: "wrap",
             gap: "15px",
           },
-          children: [
-            {
-              tag: "label",
-              namespace: "html",
-              children: [
-                {
-                  tag: "input",
-                  namespace: "html",
-                  attributes: {
-                    type: "radio",
-                    name: "paperFilter",
-                    value: "all",
-                    checked: "true",
-                  },
-                  listeners: [
-                    {
-                      type: "change",
-                      listener: () => {
-                        dialogData.paperFilter = "all";
-                      },
-                    },
-                  ],
-                },
-                {
-                  tag: "span",
-                  namespace: "html",
-                  properties: {
-                    innerHTML: ` ${getString("dialog-filter-all")}`,
-                  },
-                },
-              ],
-            },
-            {
-              tag: "label",
-              namespace: "html",
-              children: [
-                {
-                  tag: "input",
-                  namespace: "html",
-                  attributes: {
-                    type: "radio",
-                    name: "paperFilter",
-                    value: "oral",
-                  },
-                  listeners: [
-                    {
-                      type: "change",
-                      listener: () => {
-                        dialogData.paperFilter = "oral";
-                      },
-                    },
-                  ],
-                },
-                {
-                  tag: "span",
-                  namespace: "html",
-                  properties: {
-                    innerHTML: ` ${getString("dialog-filter-oral")}`,
-                  },
-                },
-              ],
-            },
-            {
-              tag: "label",
-              namespace: "html",
-              children: [
-                {
-                  tag: "input",
-                  namespace: "html",
-                  attributes: {
-                    type: "radio",
-                    name: "paperFilter",
-                    value: "poster",
-                  },
-                  listeners: [
-                    {
-                      type: "change",
-                      listener: () => {
-                        dialogData.paperFilter = "poster";
-                      },
-                    },
-                  ],
-                },
-                {
-                  tag: "span",
-                  namespace: "html",
-                  properties: {
-                    innerHTML: ` ${getString("dialog-filter-poster")}`,
-                  },
-                },
-              ],
-            },
-          ],
         },
         false,
       )
@@ -874,15 +980,31 @@ export class OpenReviewImporter {
         return;
       }
 
+      const acceptedCategoriesFromUrl =
+        await OpenReviewApi.fetchAcceptedCategories(dialogData.url);
+      const restrictToAcceptedCategories =
+        acceptedCategoriesFromUrl.length > 0 ||
+        dialogData.paperFilterUsesAcceptedCategories;
+      const acceptedCategories =
+        acceptedCategoriesFromUrl.length > 0
+          ? acceptedCategoriesFromUrl
+          : dialogData.acceptedCategories.length > 0
+            ? dialogData.acceptedCategories
+            : dialogData.paperFilter === "all"
+              ? []
+              : buildAcceptedCategoriesFromPaperFilterOptions(
+                  dialogData.paperFilterOptions,
+                );
+
       // Start import
       const options: ImportOptions = {
         url: dialogData.url,
         collectionName: dialogData.collectionName,
         downloadPdfs: dialogData.downloadPdfs,
         importReviews: dialogData.importReviews,
-        acceptedOnly: false,
-        oralOnly: dialogData.paperFilter === "oral",
-        posterOnly: dialogData.paperFilter === "poster",
+        acceptedCategories,
+        paperFilter: dialogData.paperFilter,
+        restrictToAcceptedCategories,
         skipDuplicates: dialogData.skipDuplicates,
       };
 
@@ -926,9 +1048,10 @@ export class OpenReviewImporter {
 
       // Build fetch options
       const fetchOptions: FetchOptions = {
-        acceptedOnly: options.acceptedOnly,
-        oralOnly: options.oralOnly,
-        posterOnly: options.posterOnly,
+        acceptedCategories: options.acceptedCategories,
+        restrictToAcceptedCategories: options.restrictToAcceptedCategories,
+        selectedAcceptedCategory:
+          options.paperFilter === "all" ? undefined : options.paperFilter,
       };
 
       // Fetch papers
